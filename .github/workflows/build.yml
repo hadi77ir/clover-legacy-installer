@@ -70,6 +70,7 @@ jobs:
         BUILD_NUMBER="${{ steps.check_release.outputs.build_number }}"
         TARGET_IMAGE="clover-v2-${BUILD_NUMBER}.img"
         echo "Building $TARGET_IMAGE"
+        chmod +x ./build.sh
         ./build.sh "$TARGET_IMAGE"
 
     - name: Compress image with gzip
