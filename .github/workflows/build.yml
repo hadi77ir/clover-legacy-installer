@@ -63,7 +63,10 @@ jobs:
 
         echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
         echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
-
+    - name: Install build deps
+      run: |
+        sudo apt install -y mtools
+      
     - name: Build Clover V2 image
       if: steps.check_release.outputs.should_build == 'true'
       run: |
