@@ -1,0 +1,124 @@
+name: Build Clover V2 Image
+
+on:
+  schedule:
+    # Run monthly on the 1st at 00:00 UTC
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Check for new release on cloverbootloader
+      id: check_release
+      run: |
+        # Get the latest release from cloverbootloader
+        LATEST_RELEASE=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/cloverhackycolor/cloverbootloader/releases/latest")
+
+        TAG_NAME=$(echo "$LATEST_RELEASE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tag_name',''))")
+        if [ -z "$TAG_NAME" ]; then
+          echo "Error: Could not fetch latest release from cloverbootloader"
+          exit 1
+        fi
+
+        echo "Latest release tag: $TAG_NAME"
+
+        # Extract build number from tag (e.g., "clover-v2-5176" -> 5176)
+        BUILD_NUMBER=$(echo "$TAG_NAME" | grep -oE '[0-9]+$')
+        if [ -z "$BUILD_NUMBER" ]; then
+          echo "Error: Could not extract build number from tag '$TAG_NAME'"
+          exit 1
+        fi
+
+        echo "Build number: $BUILD_NUMBER"
+
+        # Read the last processed build number from .build file
+        LAST_BUILD=""
+        if [ -f .build ]; then
+          LAST_BUILD=$(cat .build)
+        fi
+
+        echo "Last processed build: $LAST_BUILD"
+
+        # Only proceed if there's a new build
+        if [ "$LAST_BUILD" = "$BUILD_NUMBER" ]; then
+          echo "No new release to process. Already at build $BUILD_NUMBER."
+          echo "should_build=false" >> $GITHUB_OUTPUT
+        else
+          echo "New release detected: $BUILD_NUMBER"
+          echo "should_build=true" >> $GITHUB_OUTPUT
+        fi
+
+        echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+        echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+    - name: Build Clover V2 image
+      if: steps.check_release.outputs.should_build == 'true'
+      run: |
+        BUILD_NUMBER="${{ steps.check_release.outputs.build_number }}"
+        TARGET_IMAGE="clover-v2-${BUILD_NUMBER}.img"
+        echo "Building $TARGET_IMAGE"
+        ./build.sh "$TARGET_IMAGE"
+
+    - name: Compress image with gzip
+      if: steps.check_release.outputs.should_build == 'true'
+      run: |
+        BUILD_NUMBER="${{ steps.check_release.outputs.build_number }}"
+        gzip -k "clover-v2-${BUILD_NUMBER}.img"
+        echo "Created clover-v2-${BUILD_NUMBER}.img.gz"
+
+    - name: Generate SHA256 checksum
+      if: steps.check_release.outputs.should_build == 'true'
+      run: |
+        BUILD_NUMBER="${{ steps.check_release.outputs.build_number }}"
+        sha256sum "clover-v2-${BUILD_NUMBER}.img.gz" > "clover-v2-${BUILD_NUMBER}.img.gz.sha256"
+        cat "clover-v2-${BUILD_NUMBER}.img.gz.sha256"
+
+    - name: Write build number to .build file
+      if: steps.check_release.outputs.should_build == 'true'
+      run: |
+        BUILD_NUMBER="${{ steps.check_release.outputs.build_number }}"
+        echo "$BUILD_NUMBER" > .build
+        cat .build
+
+    - name: Commit .build file
+      if: steps.check_release.outputs.should_build == 'true'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add .build
+        git commit -m "Update build number to ${{ steps.check_release.outputs.build_number }}"
+        git push
+
+    - name: Create tag
+      if: steps.check_release.outputs.should_build == 'true'
+      run: |
+        BUILD_NUMBER="${{ steps.check_release.outputs.build_number }}"
+        git tag "clover-v2-${BUILD_NUMBER}"
+        git push origin "clover-v2-${BUILD_NUMBER}"
+
+    - name: Create release and upload assets
+      if: steps.check_release.outputs.should_build == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        BUILD_NUMBER="${{ steps.check_release.outputs.build_number }}"
+        TAG_NAME="clover-v2-${BUILD_NUMBER}"
+
+        gh release create "$TAG_NAME" \
+          --title "Clover V2 Build $BUILD_NUMBER" \
+          --notes "Automated build $BUILD_NUMBER from cloverbootloader release" \
+          "clover-v2-${BUILD_NUMBER}.img.gz" \
+          "clover-v2-${BUILD_NUMBER}.img.gz.sha256"
